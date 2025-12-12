@@ -2,69 +2,17 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import time
-import sqlite3
 
 # Page Config
 st.set_page_config(page_title="UniTransfer System", page_icon="🎓", layout="wide")
 
-# --- Database Functions ---
-def init_db():
-    """Initialize the SQLite database and seed with demo data if empty."""
-    conn = sqlite3.connect('transfer_system.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS requests (
-            id TEXT PRIMARY KEY,
-            uni_course TEXT,
-            dip_course TEXT,
-            grade TEXT,
-            date TEXT,
-            status TEXT,
-            evidence TEXT
-        )
-    ''')
-    
-    # Check if empty, if so, seed
-    c.execute('SELECT count(*) FROM requests')
-    if c.fetchone()[0] == 0:
-        seed_data = [
-            ('REQ-1001', 'CS101 Intro to Programming', 'PRG100 Fundamentals of C++', 'A', '2023-10-24', 'Pending', 'transcript_sem1.pdf'),
-            ('REQ-1002', 'MATH201 Calculus I', 'MAT101 Eng Math', 'B', '2023-10-25', 'Approved', 'math_syllabus.pdf'),
-            ('REQ-1003', 'ENG102 Academic Writing', 'COM101 Comm Skills', 'C', '2023-10-26', 'Rejected', 'results.png')
-        ]
-        c.executemany('INSERT INTO requests VALUES (?,?,?,?,?,?,?)', seed_data)
-        conn.commit()
-    conn.close()
-
-def get_requests():
-    """Fetch all requests from the database."""
-    conn = sqlite3.connect('transfer_system.db')
-    conn.row_factory = sqlite3.Row # Allow accessing columns by name
-    c = conn.cursor()
-    c.execute('SELECT * FROM requests ORDER BY date DESC, id DESC')
-    rows = c.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-def add_request(req):
-    """Insert a new request into the database."""
-    conn = sqlite3.connect('transfer_system.db')
-    c = conn.cursor()
-    c.execute('INSERT INTO requests VALUES (?,?,?,?,?,?,?)',
-              (req['id'], req['uni_course'], req['dip_course'], req['grade'], req['date'], req['status'], req['evidence']))
-    conn.commit()
-    conn.close()
-
-def update_status(req_id, new_status):
-    """Update the status of a request."""
-    conn = sqlite3.connect('transfer_system.db')
-    c = conn.cursor()
-    c.execute('UPDATE requests SET status = ? WHERE id = ?', (new_status, req_id))
-    conn.commit()
-    conn.close()
-
-# Initialize DB on load
-init_db()
+# --- State Management ---
+if 'requests' not in st.session_state:
+    st.session_state.requests = [
+        {'id': 'REQ-1001', 'uni_course': 'CS101 Intro to Programming', 'dip_course': 'PRG100 Fundamentals of C++', 'grade': 'A', 'date': '2023-10-24', 'status': 'Pending', 'evidence': 'transcript_sem1.pdf'},
+        {'id': 'REQ-1002', 'uni_course': 'MATH201 Calculus I', 'dip_course': 'MAT101 Eng Math', 'grade': 'B', 'date': '2023-10-25', 'status': 'Approved', 'evidence': 'math_syllabus.pdf'},
+        {'id': 'REQ-1003', 'uni_course': 'ENG102 Academic Writing', 'dip_course': 'COM101 Comm Skills', 'grade': 'C', 'date': '2023-10-26', 'status': 'Rejected', 'evidence': 'results.png'}
+    ]
 
 # --- Sidebar Navigation ---
 st.sidebar.title("🎓 UniTransfer")
@@ -72,7 +20,7 @@ st.sidebar.markdown("Student Credit Transfer Portal")
 role = st.sidebar.radio("Select Role", ["Student", "Admin"])
 
 st.sidebar.divider()
-st.sidebar.info("Database Mode: Data is stored in 'transfer_system.db' (SQLite).")
+st.sidebar.info("Prototype Mode: Data is stored in session state and resets if the server restarts.")
 
 # --- Helper Functions ---
 def get_status_color(status):
@@ -80,32 +28,21 @@ def get_status_color(status):
     if status == 'Rejected': return 'red'
     return 'orange'
 
-# --- Load Data ---
-# We fetch fresh data on every script rerun
-requests_data = get_requests()
-
 # --- STUDENT VIEW ---
 if role == "Student":
     st.title("My Transfer Requests")
     st.markdown("Submit and track your credit transfer applications.")
     
     # Stats
-    req_df = pd.DataFrame(requests_data)
+    req_df = pd.DataFrame(st.session_state.requests)
     
     col1, col2, col3 = st.columns(3)
-    if not req_df.empty:
-        total = len(req_df)
-        approved = len(req_df[req_df['status'] == 'Approved'])
-        pending = len(req_df[req_df['status'] == 'Pending'])
-    else:
-        total, approved, pending = 0, 0, 0
-
     with col1:
-        st.metric("Total Requests", total)
+        st.metric("Total Requests", len(req_df))
     with col2:
-        st.metric("Approved", approved)
+        st.metric("Approved", len(req_df[req_df['status'] == 'Approved']))
     with col3:
-        st.metric("Pending", pending)
+        st.metric("Pending", len(req_df[req_df['status'] == 'Pending']))
     
     st.divider()
 
@@ -124,8 +61,7 @@ if role == "Student":
             
             if submitted:
                 if uni_course and dip_course and grade:
-                    # Generate ID based on timestamp to ensure uniqueness roughly or count
-                    new_id = f"REQ-{1000 + len(requests_data) + 1}"
+                    new_id = f"REQ-{1000 + len(st.session_state.requests) + 1}"
                     file_name = evidence.name if evidence else "manual_submission.pdf"
                     
                     new_req = {
@@ -137,9 +73,7 @@ if role == "Student":
                         'status': 'Pending',
                         'evidence': file_name
                     }
-                    
-                    add_request(new_req)
-                    
+                    st.session_state.requests.insert(0, new_req) # Add to top
                     st.success(f"Request {new_id} submitted successfully!")
                     time.sleep(1) # Give time to read before rerun
                     st.rerun()
@@ -149,8 +83,9 @@ if role == "Student":
     # Request List
     st.subheader("Application History")
     
-    if len(requests_data) > 0:
-        for req in requests_data:
+    if len(st.session_state.requests) > 0:
+        # Custom display for better UX than raw dataframe
+        for req in st.session_state.requests:
             with st.container(border=True):
                 c1, c2, c3, c4 = st.columns([2, 3, 2, 2])
                 with c1:
@@ -174,8 +109,8 @@ elif role == "Admin":
     st.title("Admin Dashboard")
     st.markdown("Review student transfer credit applications.")
     
-    pending_reqs = [r for r in requests_data if r['status'] == 'Pending']
-    history_reqs = [r for r in requests_data if r['status'] != 'Pending']
+    pending_reqs = [r for r in st.session_state.requests if r['status'] == 'Pending']
+    history_reqs = [r for r in st.session_state.requests if r['status'] != 'Pending']
     
     # Stats
     col1, col2 = st.columns(2)
@@ -208,19 +143,20 @@ elif role == "Admin":
                 with col_evidence:
                     st.markdown("**Evidence:**")
                     st.code(req['evidence'], language="text")
+                    # In a real app, this would be a download_button
                     st.download_button("Download PDF", data="dummy data", file_name=req['evidence'], key=f"dl_{req['id']}")
 
                 with col_actions:
                     st.markdown("**Action:**")
                     c_approve, c_reject = st.columns(2)
                     if c_approve.button("Approve", key=f"app_{req['id']}", type="primary"):
-                        update_status(req['id'], 'Approved')
+                        req['status'] = 'Approved'
                         st.toast(f"Request {req['id']} Approved!")
                         time.sleep(0.5)
                         st.rerun()
                     
                     if c_reject.button("Reject", key=f"rej_{req['id']}"):
-                        update_status(req['id'], 'Rejected')
+                        req['status'] = 'Rejected'
                         st.toast(f"Request {req['id']} Rejected.")
                         time.sleep(0.5)
                         st.rerun()
