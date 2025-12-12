@@ -1,5 +1,9 @@
-## Installation
+#### Installation
+``
 pip install streamlit pandas
+``
 
-## Run
+#### Run
+``
 streamlit run transfer_system.py
+``
